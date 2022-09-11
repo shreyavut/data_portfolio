@@ -1,0 +1,328 @@
+---
+title: "dec_deciles_leaflet"
+author: "Shreya Vuttaluru and Rachel Logan"
+date: '2022-03-09'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Libraries
+```{r libraries, echo = FALSE, warning=FALSE, message=FALSE, results='hide', message=FALSE}
+#install.packages("tidyverse")
+library(tidyverse)
+library(janitor)
+##install.packages("tidycensus")
+library(tidycensus)
+library(leaflet)
+library(dplyr)
+library(googlesheets4)
+library(sf)
+library(leaflet.extras)
+
+census_api_key("af85ba467db0a722a2f7821d18e3f0b6b5318e1c")
+```
+
+```{r load_data}
+#every census tract AND every retailer sales
+clean_dec_nation_geometries <- readRDS("../../../data/processed/analysis/make_leaflet_maps/dec_nation_geometries.rds")
+clean_acs_nation_geometries <- readRDS("../../../data/processed/analysis/make_leaflet_maps/acs_nation_geometries.rds")
+
+# Pull retailer locations and count nationally
+
+retailers_dec <- readRDS("../../../data/processed/a_retailers_geospatial/03_join_retailers/all_geocoded_retailers.rds") %>% 
+  select(geoid = decennial_2020_tract_geoid, 
+         state = retailer_state, 
+         city = retailer_city) %>% 
+  group_by(geoid) %>% 
+  summarize(count = n()) %>% 
+  ungroup()
+
+# Load ACS Geometries
+
+dec_geometries <- clean_dec_nation_geometries %>% 
+  left_join(retailers_acs, by=c("geoid")) %>% 
+  filter(!is.na(count)) %>% 
+  filter(total_pop > 100) %>% 
+  mutate(retailer_concentration = count/total_pop * 10000)
+
+# Pull demographic info nationally: ACS
+race_decennial <- readRDS("../../../data/processed/a_retailers_geospatial/05_get_census_data/race_2020_decennial_census.rds")
+
+# Join demographic tracts to retailers.
+dec_tracts_w_retailers <- dec_geometries %>%
+  left_join(retailers_dec) %>%
+  left_join(race_decennial) %>%
+  rename(retailer_count = count)
+  
+state_list <- c('Maryland','District of Columbia','Virginia','Michigan','Connecticut','South Carolina','New York','Texas','Louisiana','Arizona','Kentucky', "New Jersey")
+
+state_list <- c(states_with_sales = c("Arizona", "Louisiana", "Michigan", "New York", "South Carolina", "Texas"))
+
+```
+
+```{r make_decile_tables, echo = FALSE, warning=FALSE, message=FALSE, results='hide', message=FALSE}
+
+## making deciles by retailer concentrations
+
+states_list <- c("Arizona", "Connecticut", "District of Columbia", "Kentucky", "Louisiana", "Michigan", "New York", "South Carolina", "Texas", "Virginia")
+
+states_list <- states_list[1:10] 
+
+gs4_auth()
+
+google_sheet_ids <- tibble()
+
+make_google_sheets <- function(state_name) {
+
+  sheet_id_value <<- gs4_create(name = paste0(state_name, "_demo_census_tracts"))
+  temp <- tibble(
+    state = state_name, sheet_id = sheet_id_value
+  )
+  google_sheet_ids <<- google_sheet_ids %>%
+    bind_rows(temp)
+  #id <<- gs4_find(order_by = "createdTime desc", n_max = 5)
+
+}
+
+lapply(states_list, make_google_sheets)
+
+write_rds(google_sheet_ids, "google_sheet_ids.rds")
+
+google_sheet_ids <- read_rds("google_sheet_ids.rds")
+
+all_dec_interest_tracts_nation <<- tibble()
+
+
+build_decile_tables <- function(state_name) {
+
+  all_dec_interest_tracts <- tibble()
+  
+  dec_black_table <- dec_tracts_w_retailers %>%
+    as_tibble() %>%
+    filter(state == state_name) %>%
+    mutate(retailer_concentration = (retailer_count / total_pop) * 10000) %>%
+    #mutate(average_sales_per_store = total_sales/retailer_count) %>%
+    mutate(ret_con_decile = ntile(retailer_concentration, 10),
+           ret_count_decile = ntile(retailer_count, 10),
+           pct_black_decile = ntile(pct_black, 10)) %>%
+           # total_sales_decile = ntile(total_sales, 10),
+           # avg_sales_decile = ntile(average_sales_per_store, 10)) 
+    arrange(desc(retailer_concentration)) %>%
+    filter(ret_count_decile > 7 & 
+            pct_black_decile > 7 ) %>%
+    select(-geometry)
+  
+  # if (state_name %in% states_with_sales){
+  #   dec_black_table <- dec_black_table %>% 
+  #     filter(avg_sales_decile > 7)
+  # }
+
+  dec_black_table <- dec_black_table %>% 
+    head(10)
+
+
+  assign(paste0(state_name, "_black_decile_table"),dec_black_table,envir=.GlobalEnv) 
+  
+  these_interest_tracts <- dec_black_table %>% 
+     select(geoid)
+     
+   all_dec_interest_tracts <- bind_rows(
+     all_dec_interest_tracts,these_interest_tracts
+   )
+   
+   
+   ######################################
+  
+  dec_hispanic_table <- dec_tracts_w_retailers %>%
+    as_tibble() %>%
+    filter(state == state_name) %>%
+    mutate(retailer_concentration = (retailer_count / total_pop) * 10000) %>%
+    #mutate(average_sales_per_store = total_sales/retailer_count) %>%
+    mutate(ret_con_decile = ntile(retailer_concentration, 10),
+           ret_count_decile = ntile(retailer_count, 10),
+           pct_hispanic_decile = ntile(pct_hispanic, 10)) %>%
+           # total_sales_decile = ntile(total_sales, 10),
+           # avg_sales_decile = ntile(average_sales_per_store, 10)) %>%
+    arrange(desc(retailer_concentration)) %>%
+    filter(ret_count_decile > 7 &
+           pct_hispanic_decile > 7)  %>%
+    select(-geometry)
+   
+  # if (state_name %in% states_with_sales){
+  #    dec_hispanic_table <- dec_hispanic_table %>% 
+  #       filter(avg_sales_decile > 7)
+  # }
+
+  dec_hispanic_table <- dec_hispanic_table %>%  
+     head(10)
+
+  assign(paste0(state_name, "_hispanic_decile_table"),dec_hispanic_table,envir=.GlobalEnv) 
+
+  
+  these_interest_tracts <- dec_hispanic_table %>% 
+     select(geoid)
+     
+  all_dec_interest_tracts <- bind_rows(
+     all_dec_interest_tracts, these_interest_tracts
+   ) %>% 
+     distinct()
+   
+   
+   
+  all_dec_interest_tracts_nation <<- bind_rows(
+     all_dec_interest_tracts_nation, all_dec_interest_tracts
+   )
+  
+  # write_csv(dec_black_table, paste0("../../../data/processed/08_leaflet_maps/",state_name, "_black_decile_table.csv"))
+  #  write_csv(dec_hispanic_table, paste0("../../../data/processed/08_leaflet_maps/", state_name, "_hispanic_decile_table.csv"))
+  #  #write_csv(acs_table, paste0("../../../data/processed/08_leaflet_maps/", state_name, "_acs_decile_table.csv"))
+
+   state_sheet_id <<- google_sheet_ids %>%
+      filter(state == state_name) %>%
+      select(sheet_id) %>%
+      as_vector()
+
+    sheet_write(dec_black_table, ss=state_sheet_id, sheet="dec_black_table")
+    sheet_write(dec_hispanic_table, ss=state_sheet_id, sheet="dec_hispanic_table")
+    #sheet_write(acs_table, ss=state_sheet_id, sheet="acs_table")
+
+   
+} 
+
+
+lapply(states_list, build_decile_tables) 
+
+```
+
+# pull geometries
+```{r pull_geom, echo = FALSE, warning=FALSE, message=FALSE, results='hide', message=FALSE}
+
+options(tigris_use_cache = TRUE)
+
+get_geoms <- function(state) {
+  geometries <- get_decennial(state = state,
+                            variable = "P1_001N",
+                            geography = "tract",
+                            year = 2020,
+                            geometry = TRUE,
+                            sumfile="pl")
+  
+  write_rds(geometries, paste0("../../../data/processed/08_leaflet_maps/state_tract_dec_geoms/", state, "_dec_geoms.rds"))
+  
+  
+  assign(state, geometries, envir= .GlobalEnv)
+  
+}
+
+lapply(states_list, get_geoms)
+
+
+
+### JOIN GEOMETRIES HERE
+
+```
+
+Binding geometries
+```{r bind_geom, echo = FALSE, warning=FALSE, message=FALSE, results='hide', message=FALSE}
+
+all_dec_geoms <- bind_rows(
+  lapply(
+    list.files(
+      "../../../data/processed/08_leaflet_maps/state_tract_dec_geoms/", 
+      pattern = ".rds", 
+      full.names = TRUE
+    ), 
+    readRDS
+  )
+) %>%
+  clean_names() %>%
+  select(-variable, -value)
+
+```
+
+# Making map for all retailers but with clustered concentration
+```{r mapping, echo = FALSE, warning=FALSE, message=FALSE, results='hide', message=FALSE}
+
+### bind geoids created above to all retailers
+
+dec_tract_sales_geo <- all_dec_geoms %>%
+  inner_join(dec_tract_sales) 
+
+these_polygons_dec <- all_dec_interest_tracts_nation %>% 
+  left_join(dec_tract_sales_geo) %>%
+  st_as_sf() 
+
+these_polygons_dec <- these_polygons_dec %>%
+  mutate(tract_labels = 
+     case_when(
+              average_sales_per_store == 0 ~ paste0(these_polygons_dec$name,": ",
+                                  "GEOID: ",these_polygons_dec$geoid," | ",
+                                  round(these_polygons_dec$pct_black,1),"% black | ",
+                                  round(these_polygons_dec$pct_hispanic,1),"% hispanic"),
+              TRUE        ~       paste0(these_polygons_dec$name, ": ",
+                                  "GEOID: ",these_polygons_dec$geoid," | ",
+                                  "total sales: $",these_polygons_dec$average_sales_per_store, " | ",
+                                  round(these_polygons_dec$pct_black,1),"% black | ",
+                                  round(these_polygons_dec$pct_hispanic,1),"% hispanic")
+     )
+  )
+
+dec_retailers <- dec_retailers %>%
+  mutate(joint_longitude = as.numeric(joint_longitude),
+         joint_latitude = as.numeric(joint_latitude),
+         retailer_label = 
+            case_when(
+               total_sales == 0 ~ paste0(retailer_name, " at ",retailer_address, ", ", retailer_city),
+               is.na(total_sales) ~ paste0(retailer_name, " at ",retailer_address, ", ", retailer_city),
+               TRUE             ~ paste0(retailer_name, " at ",retailer_address, ", ",retailer_city," with $",total_sales, " total sales")
+            ))
+
+BluePointIcon <- makeIcon(
+  iconUrl = "https://github.com/Howard-Center-Investigations/lottery-leaflet-maps/raw/main/marker-icon.png",
+  iconWidth = 25, iconHeight = 41,
+  iconAnchorX = 0, iconAnchorY = 0 #,
+  #shadowUrl = "https://github.com/Howard-Center-Investigations/lottery-leaflet-maps/raw/main/marker-shadow.png",
+  #shadowWidth = 41, shadowHeight = 41,
+  #shadowAnchorX =10, shadowAnchorY = 0
+)
+
+
+retailer_race_map <- leaflet() %>% 
+  addProviderTiles(providers$Stamen.TonerLite) %>% 
+  addPolygons(data = these_polygons_dec,
+                color = "blue",
+                weight = 0.5,
+                group = "these_polygons_dec",
+                smoothFactor = 0.2,
+                fillOpacity = 0.25,
+                label = ~tract_labels) %>%
+  addMarkers(data = dec_retailers,
+             ~joint_longitude, 
+             ~joint_latitude,
+             label = ~retailer_label,
+             clusterOptions = markerClusterOptions(),
+             icon = BluePointIcon
+             ) %>%
+   addSearchFeatures(
+        targetGroups  = "these_polygons_dec",
+        options = searchFeaturesOptions(zoom = 5, openPopup = TRUE)) #%>%
+  # addControl("<P><B>Hint!</B> Search for a County by name</P>",
+            # position = "bottomright")
+  
+
+retailer_race_map
+
+```
+
+Output
+```{r}
+
+retailer_race_map
+
+```
+
+
+

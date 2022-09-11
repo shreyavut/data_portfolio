@@ -1,0 +1,193 @@
+---
+title: "data_for_maps"
+author: "Aadit Tambe, Shreya Vuttaluru"
+date: "4/18/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# load libraries 
+library(tidyverse)
+library(janitor)
+library(lubridate)
+library(censusxy)
+library(dplyr)
+library(parallel)
+library(tictoc)
+library(furrr)
+library(leaflet)
+library(leaflet.extras)
+library(sf)
+options(scipen = 999)
+library(data.table)
+library(jsonlite)
+library(geojsonsf)
+library(rgdal)
+library(geojsonio)
+library(stringr)
+```
+
+## Cleaning up and exporting for maps
+
+```{r}
+
+data <- read_rds("../../../data/processed/a_retailers_geospatial/03_join_retailers/all_geocoded_retailers.rds")
+
+data_for_maps = data %>% 
+  filter(!is.na(joint_latitude)) %>% 
+  mutate(acs_2019_county_geoid = str_sub(acs_2019_tract_geoid, start=1L, end=5L)) %>% 
+  mutate(
+    retailer_name = str_to_title(retailer_name),
+    acs_2019_street_clean = str_to_title(acs_2019_street_clean),
+    acs_2019_city_clean = str_to_title(acs_2019_city_clean),
+  )  %>%
+  select(unique_id, retailer_name,acs_2019_street_clean,acs_2019_city_clean,acs_2019_state_clean,acs_2019_state_clean,acs_2019_zip_clean,joint_latitude,joint_longitude,acs_2019_county_geoid, acs_2019_tract_geoid, total_sales) 
+  
+
+#write_json(data_for_maps, "../../../data/processed/visualizations/app-map/retailer-locations/all_matched_geocoded_retailers.json")
+
+county_list = data_for_maps%>% 
+  distinct(acs_2019_county_geoid) %>% 
+  as_vector()
+
+files = list.files(path="../../../data/processed/visualizations/app-map/retailer-locations") %>%
+    str_remove("retailers_") %>%
+    str_remove(".json")
+  
+county_list_remaining = setdiff(county_list,files)
+
+county_to_json <- function(five_digit_geoid) {
+      print(paste0("writing: ", five_digit_geoid))
+      temp = data_for_maps %>% 
+      filter(acs_2019_county_geoid == five_digit_geoid)
+      write_json(temp, paste0("../../../data/processed/visualizations/app-map/retailer-locations/retailers_",five_digit_geoid,".json" ))
+}
+  
+plan(multisession, workers = 40)
+future_walk(county_list_remaining, county_to_json)
+
+```
+
+```{r}
+geoid_and_county_names = data_for_maps %>% 
+  distinct(acs_2019_county_geoid) %>% 
+  rename(geoid =acs_2019_county_geoid ) %>% 
+  inner_join(county_demographic_estimates_2019_acs) %>%
+  select(geoid,county)
+
+write_json(geoid_and_county_names,"../../../data/processed/visualizations/app-map/retailer_counties_and_geoids.json")
+
+```
+
+Getting demographic info for maps
+```{r}
+
+county_data <- read_rds("../../../data/processed/a_retailers_geospatial/05_get_census_data/county_demographic_estimates_2019_acs.rds") %>%
+  rename(county_name = county,
+         county_total_pop = total_pop,
+         county_median_household_income = median_household_income,
+         county_pct_hs_or_below = pct_hs_or_below,
+         county_pct_poverty = pct_poverty,
+         county_pct_white = pct_white,
+         county_pct_black_alone=pct_black_alone,
+         county_pct_hispanic = pct_hispanic,
+         county_id = geoid) %>% 
+  select(-state)
+
+##grouping retailers to figure out if tract has retailers
+grouped_retailers <- read_rds("../../../data/processed/a_retailers_geospatial/03_join_retailers/all_geocoded_retailers.rds") %>%
+  group_by(acs_2019_tract_geoid, .drop = FALSE) %>%
+  summarize(
+    number_of_retailers = n()
+  ) %>%
+  rename(geoid = acs_2019_tract_geoid)
+
+demographic_data <- read_rds("../../../data/processed/a_retailers_geospatial/05_get_census_data/all_us_demographic_tracts_geometries_for_map.rds")
+  
+  
+#no_geoms_demo_data <- demographic_data %>% 
+ # select(-geometry)
+
+demo_data_for_maps = demographic_data %>%
+  left_join(county_data, by=c("county_id")) %>%
+  left_join(grouped_retailers, by=c("geoid")) %>%
+    mutate(
+      number_of_retailers = replace_na(number_of_retailers, 0)
+      ) %>%
+    mutate(
+      retailer_y_n =
+      if_else(number_of_retailers > 0, "Y", "N")
+  )
+
+demo_county_list = demo_data_for_maps %>% 
+  distinct(county_id) %>% 
+  as_vector()
+
+##attempting to write a for loop
+
+sentence_data <- demo_data_for_maps %>%
+  as_tibble() %>%
+  select(-geometry) %>%
+  select(county_id, state, retailer_y_n, number_of_retailers, median_household_income, pct_black_alone, pct_hispanic) %>% 
+  group_by(county_id, state, retailer_y_n) %>%
+  summarize(
+    total_tracts = n(),
+    avg_mhi = mean(median_household_income, na.rm = TRUE),
+    avg_pct_black = mean(pct_black_alone, na.rm = TRUE),
+    avg_pct_hispanic = mean(pct_hispanic, na.rm = TRUE)
+    ) 
+
+pivoted_sentence_data <- sentence_data %>%
+  pivot_wider(names_from = retailer_y_n, values_from = c( "total_tracts", "avg_mhi", "avg_pct_black", "avg_pct_hispanic")) %>%
+  mutate(total_tracts_Y = replace_na(total_tracts_Y, 0),
+         total_tracts_N = replace_na(total_tracts_N, 0)) %>% 
+  left_join(county_data) %>% 
+  rename(geoid = county_id,
+         county = county_name)
+
+
+write_json(pivoted_sentence_data, "../../../data/processed/visualizations/app-map/county_sentence_data.json")
+
+
+  
+
+sentence_data <- data.frame(matrix(ncol = 0, nrow = 3))
+
+
+
+files = list.files(path="../../../data/processed/visualizations/app-map/county-demographics") %>%
+    str_remove("county_demo_") %>%
+    str_remove(".geojson")
+  
+county_list_remaining = setdiff(demo_county_list,files)
+
+# function_county_geoid = "04013"
+
+county_demo_to_json <- function(function_county_geoid) {
+      print(paste0("writing: ", function_county_geoid))
+      temp = demo_data_for_maps %>% 
+      filter(county_id == function_county_geoid) 
+      temp = sf_geojson(temp) 
+      geojson_write(temp, file = paste0("../../../data/processed/visualizations/app-map/county-demographics/county_demo_",function_county_geoid,".geojson" ))
+}
+  
+plan(multisession, workers = 40)
+future_walk(county_list_remaining, county_demo_to_json)
+
+```
+
+
