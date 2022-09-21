@@ -1,2 +1,4 @@
-# Reverse Geocoder 
-I reverse-geocoded (lat/long to census tract) the Washington Post Shootings database in order to do further demographic analysis on the census tracts shootings were located in as part of a group project.
+# Reverse Geocoder
+I reverse-geocoded (lat/long to census tract) the Washington Post Shootings database in order to to determine if police shootings happened disproportionately in high-poverty and majority-black neighborhoods within high-population counties.
+
+The analysis work in clean_data_analysis.Rmd was part of a group project for a data journalism class.
