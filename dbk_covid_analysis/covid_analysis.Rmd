@@ -1,0 +1,59 @@
+---
+title: "covid_analysis.Rmd"
+author: "Shreya Vuttaluru"
+date: '2022-10-04'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(lubridate)
+library(dplyr)
+library(writexl)
+library(ggplot2)
+library(janitor)
+library(readxl)
+```
+
+
+Joining the important policy dates to cases -- Shreya
+```{r}
+
+#load in data
+new_data <- read_xlsx("latest_9_30_covid_data.xlsx") %>%
+  clean_names() %>%
+  rename(
+    date = positive_test_result_date
+  )
+
+
+### load in policy dates policy dates
+historic_dates <- read_csv("historical_covid_dates.csv") %>%
+  select(dates, what_happened) %>%
+  rename(
+    date = dates
+  )
+
+
+##join and pivot data so faculty, student and staff are in rows
+join_dates_and_cases <- new_data %>%
+  left_join(historic_dates, by=c("date")) %>%
+  pivot_wider(names_from=primary_role, values_from=no_of_cases) %>%
+  clean_names()
+
+##pivot even wider so each record corresponds to one date
+wide_join_dates_and_cases <- new_data %>%
+  left_join(historic_dates, by=c("date")) %>%
+  select(-diamondback_request) %>%
+  group_by(reporting_type) %>%
+  pivot_wider(names_from=c("primary_role", "reporting_type"), values_from=no_of_cases) %>%
+  clean_names() %>%
+  mutate_at(c(3:8), ~replace_na(.,0))
+
+
+write_xlsx(join_dates_and_cases, "join_dates_and_cases.xlsx")
+
+write_xlsx(wide_join_dates_and_cases, "wide_join_dates_and_cases.xlsx")
+
+
+```
