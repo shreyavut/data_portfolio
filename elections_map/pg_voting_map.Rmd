@@ -1,0 +1,167 @@
+---
+title: "Polling Places Map"
+author: "Shreya Vuttaluru"
+date: '2022-10-26'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+## general packages
+library(tidyverse)
+library(tidycensus)
+library(shiny)
+library(shinythemes)
+library(shinyWidgets)
+library(janitor)
+library(lubridate)
+library(leaflet)
+library(leaflet.extras)
+library(shiny)
+
+## geocoding packages
+library(ggmap)
+library(tmaptools)
+library(RCurl)
+library(jsonlite)
+library(tidyverse)
+library(leaflet)
+library(sf)
+
+```
+
+## Load in data from pdfs using Tabula 
+
+```{r cars}
+polling_places <- read_csv("pg_polling_data/tabula-pg_county_polling.csv") %>%
+  clean_names()
+  
+early_voting <- read_csv("pg_polling_data/tabula-pg_early_voting.csv") %>%
+  clean_names()
+
+```
+
+## Clean data further, create consolidated address column, and geocode
+
+```{r pressure, echo=FALSE}
+
+## create address colun
+polling_places_with_address <- polling_places %>%
+  mutate(
+    complete_address = paste(street, city, state, zip, sep=", ")
+  )
+
+early_voting_with_address <- early_voting %>%
+  mutate(
+    complete_address = paste(street, city, state, zip, sep=", ")
+  )
+
+## geocode polling places
+
+polling_list <- tibble() 
+
+#loop through
+for(i in 1:nrow(polling_places_with_address)) {
+   
+   ifelse(is.na(polling_places_with_address$complete_address[i]), NA,      
+   results <- geocode(polling_places_with_address$complete_address[i], output = "latlona", source = "google"))
+           polling_places_with_address$longitude[i] <- as.numeric(results[1])
+           polling_places_with_address$latitude[i] <- as.numeric(results[2])
+           
+    #spatial_dallas_incidents <- spatial_dallas_incidents %>%
+         polling_list <-
+           bind_rows(polling_places_with_address) 
+
+}
+
+
+## geocode early voting
+
+early_voting_list <- tibble() 
+
+#loop through
+for(i in 1:nrow(early_voting_with_address)) {
+   
+   ifelse(is.na(early_voting_with_address$complete_address[i]), NA,      
+   results <- geocode(early_voting_with_address$complete_address[i], output = "latlona", source = "google"))
+           early_voting_with_address$longitude[i] <- as.numeric(results[1])
+           early_voting_with_address$latitude[i] <- as.numeric(results[2])
+           
+    #spatial_dallas_incidents <- spatial_dallas_incidents %>%
+         early_voting_list <-
+           bind_rows(early_voting_with_address) 
+
+}
+
+
+```
+
+## Map
+
+```{r}
+
+## shapefile for pg county
+pg_shp <- st_read("pg.geojson")
+
+## quick sentence case stuff
+early_voting_list <- early_voting_list %>%
+   mutate(
+    polling_place = str_to_title(polling_place),
+    map_addy = str_to_title(paste(street, city, sep=", "))
+    )
+  
+polling_list <- polling_list %>%
+  mutate(
+    name = str_to_title(name),
+    map_addy = str_to_title(paste(street, city, sep=", "))
+  )
+
+## for labels
+polling_labels <- sprintf(
+  "<strong>%s</strong><br/>Address: %s",
+  polling_list$name, polling_list$map_addy) %>%
+  lapply(htmltools::HTML)
+
+early_labels <- sprintf(
+  "<strong>%s</strong><br/>Address: %s",
+  early_voting_list$polling_place, early_voting_list$map_addy) %>%
+  lapply(htmltools::HTML)
+
+
+voting_map <- leaflet() %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  setView(lat = 38.89673, lng = -76.90795, zoom = 10) %>%
+  addPolylines(
+    data = pg_shp,
+    weight = 2,
+    color = "black"
+  ) %>%
+  addCircleMarkers(group = "Election Day Voting",
+                    data = polling_list,
+                    label = ~polling_labels,
+                    radius = 5,
+                    color = "navy",
+                    fillOpacity = 0.6,
+                    stroke = FALSE,
+                    #highlightOptions = highlightOptions(color = "white", weight = 5, bringToFront = TRUE)
+                    ) %>%
+   addCircleMarkers(group = "Early Voting",
+                    data = early_voting_list,
+                    label = ~early_labels,
+                    radius = 5,
+                    color = "red",
+                    fillOpacity = 0.6,
+                    stroke = FALSE,
+                    #highlightOptions = highlightOptions(color = "white", weight = 5, bringToFront = TRUE)
+                    ) %>%
+  addLayersControl(
+    baseGroups = c("Early Voting", "Election Day Voting"),
+    position = "topleft", 
+    options = layersControlOptions(collapsed = FALSE)
+  ) 
+
+library(htmlwidgets)
+saveWidget(voting_map, "voting_map.html")
+  
+
+```
