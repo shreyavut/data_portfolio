@@ -3,4 +3,4 @@ I'm assisting Professor Rob Wells at the University of Maryland with spatial and
 
 To see an interactive map created from my analysis for reporter use, click [here](https://profrobwells.github.io/Baltimore/rlining_and_demographics.html).
 
-I'm currently working on pivoting this map to a Shiny app! Check back here soon for updates. 
+I pivoted this analysis to a Shiny app! Check out my code for that [here](https://github.com/shreyavut/baltimore-divided-app) and see the final results [here](https://cnsmaryland.shinyapps.io/baltimore-divided-app/). 
